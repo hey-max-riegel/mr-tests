@@ -541,6 +541,65 @@ export default function WoltDashboard() {
     };
   }, [monthlyData]);
 
+  // Current month budget tracking
+  const currentMonthBudget = useMemo(() => {
+    const now = new Date();
+    const currentMonthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    const currentMonthData = monthlyData.find(m => m.month === currentMonthKey);
+    const spent = currentMonthData?.amount || 0;
+    const percentage = monthlyBudget > 0 ? (spent / monthlyBudget) * 100 : 0;
+    const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+    const dayOfMonth = now.getDate();
+    const projectedSpend = dayOfMonth > 0 ? (spent / dayOfMonth) * daysInMonth : 0;
+    return { spent, percentage, projectedSpend, daysRemaining: daysInMonth - dayOfMonth };
+  }, [monthlyData, monthlyBudget]);
+
+  // Day of week data
+  const dayOfWeekData = useMemo(() => {
+    const days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+    const dayStats = {};
+    days.forEach(d => dayStats[d] = { day: d, orders: 0, amount: 0 });
+    filteredData.forEach(d => {
+      dayStats[d.DayOfWeek].orders += 1;
+      dayStats[d.DayOfWeek].amount += d.Amount;
+    });
+    return days.map(d => dayStats[d]);
+  }, [filteredData]);
+
+  // Hour data
+  const hourData = useMemo(() => {
+    const hours = {};
+    for (let i = 0; i < 24; i++) hours[i] = { hour: i, orders: 0 };
+    filteredData.forEach(d => hours[d.Hour].orders += 1);
+    return Object.values(hours);
+  }, [filteredData]);
+
+  // Cuisine data with legend-friendly format
+  const cuisineData = useMemo(() => {
+    const cuisines = {};
+    filteredData.forEach(d => {
+      const meceCuisine = mapToMECECuisine(d.Cuisine);
+      if (!cuisines[meceCuisine]) cuisines[meceCuisine] = { total: 0, orders: 0 };
+      cuisines[meceCuisine].total += d.Amount;
+      cuisines[meceCuisine].orders += 1;
+    });
+    return Object.entries(cuisines)
+      .map(([name, data]) => ({ name, value: Math.round(data.total * 100) / 100, orders: data.orders }))
+      .sort((a, b) => b.value - a.value);
+  }, [filteredData]);
+
+  // Top restaurants
+  const topRestaurants = useMemo(() => {
+    const counts = {};
+    filteredData.forEach(d => {
+      counts[d.Restaurant] = (counts[d.Restaurant] || 0) + 1;
+    });
+    return Object.entries(counts)
+      .map(([name, orders]) => ({ name: name.length > 20 ? name.slice(0, 20) + '...' : name, fullName: name, orders }))
+      .sort((a, b) => b.orders - a.orders)
+      .slice(0, 10);
+  }, [filteredData]);
+
   const automatedInsights = useMemo(() => {
     const insights = [];
     const avgMonthlySpend = monthlyData.length
@@ -613,65 +672,6 @@ export default function WoltDashboard() {
 
     return alerts;
   }, [monthlyBenchmarks, stats, hourData]);
-
-  // Current month budget tracking
-  const currentMonthBudget = useMemo(() => {
-    const now = new Date();
-    const currentMonthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-    const currentMonthData = monthlyData.find(m => m.month === currentMonthKey);
-    const spent = currentMonthData?.amount || 0;
-    const percentage = monthlyBudget > 0 ? (spent / monthlyBudget) * 100 : 0;
-    const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
-    const dayOfMonth = now.getDate();
-    const projectedSpend = dayOfMonth > 0 ? (spent / dayOfMonth) * daysInMonth : 0;
-    return { spent, percentage, projectedSpend, daysRemaining: daysInMonth - dayOfMonth };
-  }, [monthlyData, monthlyBudget]);
-
-  // Day of week data
-  const dayOfWeekData = useMemo(() => {
-    const days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
-    const dayStats = {};
-    days.forEach(d => dayStats[d] = { day: d, orders: 0, amount: 0 });
-    filteredData.forEach(d => {
-      dayStats[d.DayOfWeek].orders += 1;
-      dayStats[d.DayOfWeek].amount += d.Amount;
-    });
-    return days.map(d => dayStats[d]);
-  }, [filteredData]);
-
-  // Hour data
-  const hourData = useMemo(() => {
-    const hours = {};
-    for (let i = 0; i < 24; i++) hours[i] = { hour: i, orders: 0 };
-    filteredData.forEach(d => hours[d.Hour].orders += 1);
-    return Object.values(hours);
-  }, [filteredData]);
-
-  // Cuisine data with legend-friendly format
-  const cuisineData = useMemo(() => {
-    const cuisines = {};
-    filteredData.forEach(d => {
-      const meceCuisine = mapToMECECuisine(d.Cuisine);
-      if (!cuisines[meceCuisine]) cuisines[meceCuisine] = { total: 0, orders: 0 };
-      cuisines[meceCuisine].total += d.Amount;
-      cuisines[meceCuisine].orders += 1;
-    });
-    return Object.entries(cuisines)
-      .map(([name, data]) => ({ name, value: Math.round(data.total * 100) / 100, orders: data.orders }))
-      .sort((a, b) => b.value - a.value);
-  }, [filteredData]);
-
-  // Top restaurants
-  const topRestaurants = useMemo(() => {
-    const counts = {};
-    filteredData.forEach(d => {
-      counts[d.Restaurant] = (counts[d.Restaurant] || 0) + 1;
-    });
-    return Object.entries(counts)
-      .map(([name, orders]) => ({ name: name.length > 20 ? name.slice(0, 20) + '...' : name, fullName: name, orders }))
-      .sort((a, b) => b.orders - a.orders)
-      .slice(0, 10);
-  }, [filteredData]);
 
   // Restaurant churn analysis (abandoned restaurants)
   const churnAnalysis = useMemo(() => {
