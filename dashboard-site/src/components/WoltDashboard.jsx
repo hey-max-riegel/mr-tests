@@ -381,8 +381,25 @@ export default function WoltDashboard() {
   const [uploadedCSV, setUploadedCSV] = useState('');
   const [uploadedFileName, setUploadedFileName] = useState('');
   const [uploadError, setUploadError] = useState('');
+  const [uploadSummary, setUploadSummary] = useState(null);
+  const [excludeOutliers, setExcludeOutliers] = useState(false);
+  const [showDataTables, setShowDataTables] = useState(false);
 
   const data = useMemo(() => parseCSV(uploadedCSV || rawData), [uploadedCSV]);
+
+  const outlierThreshold = useMemo(() => {
+    if (data.length < 4) return Number.POSITIVE_INFINITY;
+    const values = data.map((d) => d.Amount).sort((a, b) => a - b);
+    const q1 = values[Math.floor(values.length * 0.25)] ?? values[0];
+    const q3 = values[Math.floor(values.length * 0.75)] ?? values[values.length - 1];
+    const iqr = q3 - q1;
+    return q3 + (1.5 * iqr);
+  }, [data]);
+
+  const analysisData = useMemo(() => (
+    excludeOutliers ? data.filter((d) => d.Amount <= outlierThreshold) : data
+  ), [data, excludeOutliers, outlierThreshold]);
+  const removedOutlierCount = Math.max(0, data.length - analysisData.length);
 
   // Filter states
   const [selectedYear, setSelectedYear] = useState('all');
@@ -416,8 +433,17 @@ export default function WoltDashboard() {
         setUploadError('Could not parse any rows. Please upload a valid Wolt CSV export.');
         return;
       }
+      const headers = parseCSVLine(content.trim().split(/\r?\n/)[0]).map((h) => String(h || '').trim());
+      const dates = parsed.map((row) => row.Date).filter(isValidDate).sort();
       setUploadedCSV(content);
       setUploadedFileName(file.name);
+      setUploadSummary({
+        rows: parsed.length,
+        columns: headers,
+        dateStart: dates[0] || 'n/a',
+        dateEnd: dates[dates.length - 1] || 'n/a'
+      });
+      setExcludeOutliers(false);
       setUploadError('');
     };
     reader.onerror = () => setUploadError('Failed to read file.');
@@ -425,13 +451,13 @@ export default function WoltDashboard() {
   };
 
   // Get unique values for filters
-  const allCuisines = useMemo(() => [...new Set(data.map(d => mapToMECECuisine(d.Cuisine)))].sort(), [data]);
-  const allRestaurants = useMemo(() => [...new Set(data.map(d => d.Restaurant))].sort(), [data]);
-  const years = useMemo(() => [...new Set(data.map(d => d.Year))].sort(), [data]);
+  const allCuisines = useMemo(() => [...new Set(analysisData.map(d => mapToMECECuisine(d.Cuisine)))].sort(), [analysisData]);
+  const allRestaurants = useMemo(() => [...new Set(analysisData.map(d => d.Restaurant))].sort(), [analysisData]);
+  const years = useMemo(() => [...new Set(analysisData.map(d => d.Year))].sort(), [analysisData]);
 
   // Apply all filters
   const filteredData = useMemo(() => {
-    let filtered = data;
+    let filtered = analysisData;
     if (selectedYear !== 'all') {
       filtered = filtered.filter(d => d.Year === parseInt(selectedYear));
     }
@@ -442,7 +468,7 @@ export default function WoltDashboard() {
       filtered = filtered.filter(d => d.Restaurant === selectedRestaurant);
     }
     return filtered;
-  }, [data, selectedYear, selectedCuisine, selectedRestaurant]);
+  }, [analysisData, selectedYear, selectedCuisine, selectedRestaurant]);
 
   // Stats calculations
   const stats = useMemo(() => {
@@ -495,6 +521,24 @@ export default function WoltDashboard() {
       ? ((current.amount - previous.amount) / previous.amount) * 100
       : 0;
     return { current, previous, change };
+  }, [monthlyData]);
+
+  const monthlyBenchmarks = useMemo(() => {
+    if (!monthlyData.length) return null;
+    const current = monthlyData[monthlyData.length - 1];
+    const previous = monthlyData.length > 1 ? monthlyData[monthlyData.length - 2] : null;
+    const rollingWindow = monthlyData.slice(-3);
+    const rollingAvg = rollingWindow.reduce((sum, m) => sum + m.amount, 0) / rollingWindow.length;
+    const personalBest = monthlyData.reduce((best, month) => (month.amount < best.amount ? month : best), monthlyData[0]);
+    return {
+      current,
+      previous,
+      rollingAvg,
+      personalBest,
+      vsPrevious: previous ? ((current.amount - previous.amount) / Math.max(previous.amount, 1)) * 100 : null,
+      vsRollingAvg: ((current.amount - rollingAvg) / Math.max(rollingAvg, 1)) * 100,
+      vsBest: ((current.amount - personalBest.amount) / Math.max(personalBest.amount, 1)) * 100,
+    };
   }, [monthlyData]);
 
   // Current month budget tracking
@@ -559,7 +603,7 @@ export default function WoltDashboard() {
   // Restaurant churn analysis (abandoned restaurants)
   const churnAnalysis = useMemo(() => {
     const restaurantData = {};
-    data.forEach(d => {
+    analysisData.forEach(d => {
       if (!restaurantData[d.Restaurant]) {
         restaurantData[d.Restaurant] = { orders: [], lastOrder: null, totalOrders: 0 };
       }
@@ -590,12 +634,12 @@ export default function WoltDashboard() {
       .length;
 
     return { abandoned, oneHitWonders };
-  }, [data]);
+  }, [analysisData]);
 
   // Top 3 restaurants trend
   const top3RestaurantsTrend = useMemo(() => {
     const counts = {};
-    data.forEach(d => {
+    analysisData.forEach(d => {
       counts[d.Restaurant] = (counts[d.Restaurant] || 0) + 1;
     });
     const top3Names = Object.entries(counts)
@@ -604,7 +648,7 @@ export default function WoltDashboard() {
       .map(([name]) => name);
 
     const quarterlyData = {};
-    data.forEach(d => {
+    analysisData.forEach(d => {
       const quarter = `${d.Year} Q${Math.ceil(d.Month / 3)}`;
       if (!quarterlyData[quarter]) {
         quarterlyData[quarter] = { quarter, sortKey: `${d.Year}-${Math.ceil(d.Month / 3)}` };
@@ -621,18 +665,18 @@ export default function WoltDashboard() {
       data: Object.values(quarterlyData).sort((a, b) => a.sortKey.localeCompare(b.sortKey)),
       restaurants: top3Names
     };
-  }, [data]);
+  }, [analysisData]);
 
   // Yearly comparison
   const yearlyComparison = useMemo(() => {
     const yearly = {};
-    data.forEach(d => {
+    analysisData.forEach(d => {
       if (!yearly[d.Year]) yearly[d.Year] = { year: d.Year, amount: 0, orders: 0 };
       yearly[d.Year].amount += d.Amount;
       yearly[d.Year].orders += 1;
     });
     return Object.values(yearly).sort((a, b) => a.year - b.year);
-  }, [data]);
+  }, [analysisData]);
 
   const formatCurrency = (val) => `€${val.toFixed(2)}`;
   const formatMonth = (val) => {
@@ -737,7 +781,13 @@ export default function WoltDashboard() {
             {uploadedFileName && <span className="text-sm" style={{color: WOLT_TEXT_SECONDARY}}>Using: {uploadedFileName}</span>}
             {uploadedCSV && (
               <button
-                onClick={() => { setUploadedCSV(''); setUploadedFileName(''); setUploadError(''); }}
+                onClick={() => {
+                  setUploadedCSV('');
+                  setUploadedFileName('');
+                  setUploadError('');
+                  setUploadSummary(null);
+                  setExcludeOutliers(false);
+                }}
                 className="px-3 py-2 rounded-lg text-sm"
                 style={{ backgroundColor: WOLT_BG, border: `1px solid ${WOLT_BORDER}`, color: WOLT_TEXT_SECONDARY }}
               >
@@ -746,6 +796,24 @@ export default function WoltDashboard() {
             )}
             {uploadError && <span id="wolt-upload-error" role="alert" className="text-sm" style={{color: WOLT_DANGER}}>{uploadError}</span>}
           </div>
+
+          {uploadSummary && (
+            <div className="mb-4 p-3 rounded-xl" style={{ backgroundColor: WOLT_BG, border: `1px solid ${WOLT_BORDER}` }}>
+              <div className="text-sm font-semibold mb-2" style={{ color: WOLT_TEXT }}>Last upload summary</div>
+              <div className="flex flex-wrap gap-x-6 gap-y-1 text-sm" style={{ color: WOLT_TEXT_SECONDARY }}>
+                <span>Rows: {uploadSummary.rows}</span>
+                <span>Date range: {uploadSummary.dateStart} to {uploadSummary.dateEnd}</span>
+                <span>Columns detected: {uploadSummary.columns.length}</span>
+              </div>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {uploadSummary.columns.map((col) => (
+                  <span key={col} className="px-2 py-1 rounded-md text-xs" style={{ backgroundColor: WOLT_BG_SUBTLE, color: WOLT_TEXT_SECONDARY }}>
+                    {col}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
 
           <div className="flex flex-wrap items-center gap-4" aria-label="Wolt filters">
             <div className="flex items-center gap-2">
@@ -799,11 +867,35 @@ export default function WoltDashboard() {
                 Clear Filters
               </button>
             )}
+
+            {uploadedCSV && (
+              <label className="flex items-center gap-2 text-sm" style={{ color: WOLT_TEXT_SECONDARY }}>
+                <input
+                  type="checkbox"
+                  checked={excludeOutliers}
+                  onChange={(e) => setExcludeOutliers(e.target.checked)}
+                />
+                Exclude high-spend outliers
+              </label>
+            )}
+
+            <button
+              onClick={() => setShowDataTables((prev) => !prev)}
+              className="px-3 py-2 rounded-lg text-sm"
+              style={{ backgroundColor: WOLT_BG, border: `1px solid ${WOLT_BORDER}`, color: WOLT_TEXT_SECONDARY }}
+            >
+              {showDataTables ? 'Hide' : 'Show'} chart data tables
+            </button>
           </div>
 
           {hasActiveFilters && (
             <div className="mt-3 text-sm" style={{color: WOLT_BLUE}}>
-              Showing {filteredData.length} of {data.length} orders
+              Showing {filteredData.length} of {analysisData.length} orders
+            </div>
+          )}
+          {excludeOutliers && removedOutlierCount > 0 && (
+            <div className="mt-1 text-sm" style={{ color: WOLT_WARNING }}>
+              Excluded {removedOutlierCount} outlier rows and recalculated insights.
             </div>
           )}
         </div>
@@ -884,6 +976,114 @@ export default function WoltDashboard() {
                 </div>
                 <div className="text-xs" style={{color: WOLT_TEXT_SECONDARY}}>Change</div>
               </div>
+            </div>
+          </div>
+        )}
+
+        {monthlyBenchmarks && (
+          <div className="mb-6 p-4 rounded-2xl" style={{ backgroundColor: WOLT_BG_SUBTLE, border: `1px solid ${WOLT_BORDER}` }}>
+            <h3 className="text-lg font-bold mb-3" style={{ color: WOLT_TEXT }}>Meaningful Baselines</h3>
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+              <div className="p-3 rounded-lg" style={{ backgroundColor: WOLT_BG }}>
+                <div className="text-xs" style={{ color: WOLT_TEXT_SECONDARY }}>Current month</div>
+                <div className="text-lg font-bold" style={{ color: WOLT_BLUE }}>€{monthlyBenchmarks.current.amount.toFixed(2)}</div>
+                <div className="text-xs" style={{ color: WOLT_TEXT_SECONDARY }}>{formatMonth(monthlyBenchmarks.current.month)}</div>
+              </div>
+              <div className="p-3 rounded-lg" style={{ backgroundColor: WOLT_BG }}>
+                <div className="text-xs" style={{ color: WOLT_TEXT_SECONDARY }}>Last month</div>
+                <div className="text-lg font-bold" style={{ color: WOLT_TEXT }}>
+                  {monthlyBenchmarks.previous ? `€${monthlyBenchmarks.previous.amount.toFixed(2)}` : 'n/a'}
+                </div>
+                {monthlyBenchmarks.vsPrevious !== null && (
+                  <div className="text-xs" style={{ color: monthlyBenchmarks.vsPrevious > 0 ? WOLT_DANGER : WOLT_SUCCESS }}>
+                    {monthlyBenchmarks.vsPrevious > 0 ? '+' : ''}{monthlyBenchmarks.vsPrevious.toFixed(1)}% vs last month
+                  </div>
+                )}
+              </div>
+              <div className="p-3 rounded-lg" style={{ backgroundColor: WOLT_BG }}>
+                <div className="text-xs" style={{ color: WOLT_TEXT_SECONDARY }}>3-month average</div>
+                <div className="text-lg font-bold" style={{ color: WOLT_TEXT }}>€{monthlyBenchmarks.rollingAvg.toFixed(2)}</div>
+                <div className="text-xs" style={{ color: monthlyBenchmarks.vsRollingAvg > 0 ? WOLT_DANGER : WOLT_SUCCESS }}>
+                  {monthlyBenchmarks.vsRollingAvg > 0 ? '+' : ''}{monthlyBenchmarks.vsRollingAvg.toFixed(1)}% vs 3-month avg
+                </div>
+              </div>
+              <div className="p-3 rounded-lg" style={{ backgroundColor: WOLT_BG }}>
+                <div className="text-xs" style={{ color: WOLT_TEXT_SECONDARY }}>Personal best month</div>
+                <div className="text-lg font-bold" style={{ color: WOLT_SUCCESS }}>€{monthlyBenchmarks.personalBest.amount.toFixed(2)}</div>
+                <div className="text-xs" style={{ color: WOLT_TEXT_SECONDARY }}>
+                  {formatMonth(monthlyBenchmarks.personalBest.month)} ({monthlyBenchmarks.vsBest > 0 ? '+' : ''}{monthlyBenchmarks.vsBest.toFixed(1)}% now)
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {showDataTables && (
+          <div className="mb-6 p-5 rounded-2xl overflow-x-auto" style={{ backgroundColor: WOLT_BG, border: `1px solid ${WOLT_BORDER}` }}>
+            <h3 className="text-lg font-bold mb-4" style={{ color: WOLT_TEXT }}>Chart Data Tables</h3>
+
+            <div className="mb-4">
+              <h4 className="font-semibold mb-2" style={{ color: WOLT_TEXT }}>Monthly Trend</h4>
+              <table className="min-w-full text-sm">
+                <thead>
+                  <tr style={{ color: WOLT_TEXT_SECONDARY }}>
+                    <th className="text-left pr-4">Month</th>
+                    <th className="text-left pr-4">Spent (€)</th>
+                    <th className="text-left">Orders</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {monthlyData.map((row) => (
+                    <tr key={row.month}>
+                      <td className="pr-4">{row.month}</td>
+                      <td className="pr-4">{row.amount.toFixed(2)}</td>
+                      <td>{row.orders}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="mb-4">
+              <h4 className="font-semibold mb-2" style={{ color: WOLT_TEXT }}>Cuisine Breakdown</h4>
+              <table className="min-w-full text-sm">
+                <thead>
+                  <tr style={{ color: WOLT_TEXT_SECONDARY }}>
+                    <th className="text-left pr-4">Cuisine</th>
+                    <th className="text-left pr-4">Orders</th>
+                    <th className="text-left">Spent (€)</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {cuisineData.map((row) => (
+                    <tr key={row.name}>
+                      <td className="pr-4">{row.name}</td>
+                      <td className="pr-4">{row.orders}</td>
+                      <td>{row.value.toFixed(2)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="mb-4">
+              <h4 className="font-semibold mb-2" style={{ color: WOLT_TEXT }}>Top Restaurants</h4>
+              <table className="min-w-full text-sm">
+                <thead>
+                  <tr style={{ color: WOLT_TEXT_SECONDARY }}>
+                    <th className="text-left pr-4">Restaurant</th>
+                    <th className="text-left">Orders</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {topRestaurants.map((row) => (
+                    <tr key={row.name}>
+                      <td className="pr-4">{row.name}</td>
+                      <td>{row.orders}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           </div>
         )}
@@ -1099,7 +1299,7 @@ export default function WoltDashboard() {
           </ResponsiveContainer>
           <div className="grid grid-cols-3 gap-4 mt-4">
             {top3RestaurantsTrend.restaurants.map((name, idx) => {
-              const restaurantOrders = data.filter(d => d.Restaurant === name);
+              const restaurantOrders = analysisData.filter(d => d.Restaurant === name);
               const totalSpent = restaurantOrders.reduce((sum, d) => sum + d.Amount, 0);
               const firstOrder = restaurantOrders[0]?.Date;
               const lastOrder = restaurantOrders[restaurantOrders.length - 1]?.Date;

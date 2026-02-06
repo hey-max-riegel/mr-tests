@@ -25,10 +25,10 @@ const colors = {
   // Text
   text: {
     primary: '#ffffff',      // Primary text
-    secondary: '#a3a3a3',    // Secondary text
-    muted: '#737373',        // Muted text
-    subtle: '#525252',       // Very subtle text
-    disabled: '#404040',     // Disabled text
+    secondary: '#c7c7c7',    // Secondary text
+    muted: '#aaaaaa',        // Muted text
+    subtle: '#8f8f8f',       // Very subtle text
+    disabled: '#6f6f6f',     // Disabled text
   },
   // Grey gradient for charts (monochrome)
   grey: {
@@ -902,6 +902,9 @@ export default function Dashboard() {
   const [searchQuery, setSearchQuery] = useState('');
   const [uploadedFileName, setUploadedFileName] = useState('');
   const [uploadError, setUploadError] = useState('');
+  const [uploadSummary, setUploadSummary] = useState(null);
+  const [excludeOutliers, setExcludeOutliers] = useState(false);
+  const [showDataTables, setShowDataTables] = useState(false);
   const [tripRows, setTripRows] = useState([]);
 
   useEffect(() => {
@@ -928,20 +931,65 @@ export default function Dashboard() {
         setUploadError('Could not parse rows from CSV.');
         return;
       }
+      const headers = parseCSVLine(content.trim().split(/\r?\n/)[0]).map((h) => String(h || '').trim());
+      const dates = parsed.map((row) => row.date).filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(String(d || ''))).sort();
       setTripRows(parsed);
       setUploadedFileName(file.name);
+      setUploadSummary({
+        rows: parsed.length,
+        columns: headers,
+        dateStart: dates[0] || 'n/a',
+        dateEnd: dates[dates.length - 1] || 'n/a'
+      });
+      setExcludeOutliers(false);
       setUploadError('');
     };
     reader.onerror = () => setUploadError('Failed to read file.');
     reader.readAsText(file);
   };
 
-  const derived = useMemo(() => deriveCoreMetrics(tripRows), [tripRows]);
+  const priceOutlierThreshold = useMemo(() => {
+    if (tripRows.length < 4) return Number.POSITIVE_INFINITY;
+    const values = tripRows.map((row) => row.price).sort((a, b) => a - b);
+    const q1 = values[Math.floor(values.length * 0.25)] ?? values[0];
+    const q3 = values[Math.floor(values.length * 0.75)] ?? values[values.length - 1];
+    const iqr = q3 - q1;
+    return q3 + (1.5 * iqr);
+  }, [tripRows]);
+
+  const analysisRows = useMemo(() => (
+    excludeOutliers ? tripRows.filter((row) => row.price <= priceOutlierThreshold) : tripRows
+  ), [tripRows, excludeOutliers, priceOutlierThreshold]);
+  const removedOutlierCount = Math.max(0, tripRows.length - analysisRows.length);
+
+  const derived = useMemo(() => deriveCoreMetrics(analysisRows), [analysisRows]);
   const summaryStats = derived?.summaryStats || defaultSummaryStats;
   const monthlyData = derived?.monthlyData || defaultMonthlyData;
   const yearlyData = derived?.yearlyData || defaultYearlyData;
   const costBreakdown = derived?.costBreakdown || defaultCostBreakdown;
   const costEfficiency = derived?.costEfficiency || defaultCostEfficiency;
+
+  const monthlyBenchmarks = useMemo(() => {
+    if (!monthlyData.length) return null;
+    const enriched = monthlyData
+      .filter((m) => (m.distance || 0) > 0)
+      .map((m) => ({ ...m, costPerKm: (m.trueCost || 0) / Math.max(m.distance || 1, 1) }));
+    if (!enriched.length) return null;
+    const current = enriched[enriched.length - 1];
+    const previous = enriched.length > 1 ? enriched[enriched.length - 2] : null;
+    const rolling = enriched.slice(-3);
+    const rollingAvg = rolling.reduce((sum, m) => sum + m.costPerKm, 0) / rolling.length;
+    const best = enriched.reduce((bestMonth, month) => (month.costPerKm < bestMonth.costPerKm ? month : bestMonth), enriched[0]);
+    return {
+      current,
+      previous,
+      rollingAvg,
+      best,
+      vsPrevious: previous ? ((current.costPerKm - previous.costPerKm) / Math.max(previous.costPerKm, 0.001)) * 100 : null,
+      vsRollingAvg: ((current.costPerKm - rollingAvg) / Math.max(rollingAvg, 0.001)) * 100,
+      vsBest: ((current.costPerKm - best.costPerKm) / Math.max(best.costPerKm, 0.001)) * 100
+    };
+  }, [monthlyData]);
 
   const filteredModels = useMemo(() => {
     if (selectedBrands.length === 0) return modelData;
@@ -1024,16 +1072,100 @@ export default function Dashboard() {
             </span>
             {tripRows.length > 0 && (
               <button
-                onClick={() => { setTripRows([]); setUploadedFileName(''); setUploadError(''); }}
+                onClick={() => {
+                  setTripRows([]);
+                  setUploadedFileName('');
+                  setUploadError('');
+                  setUploadSummary(null);
+                  setExcludeOutliers(false);
+                }}
                 className="px-3 py-2 rounded-lg text-sm"
                 style={{ backgroundColor: colors.bg.subtle, border: `1px solid ${colors.border.default}`, color: colors.text.muted }}
               >
                 Reset Data
               </button>
             )}
+            {tripRows.length > 0 && (
+              <label className="flex items-center gap-2 text-sm" style={{ color: colors.text.muted }}>
+                <input
+                  type="checkbox"
+                  checked={excludeOutliers}
+                  onChange={(e) => setExcludeOutliers(e.target.checked)}
+                />
+                Exclude high-cost outliers
+              </label>
+            )}
+            <button
+              onClick={() => setShowDataTables((prev) => !prev)}
+              className="px-3 py-2 rounded-lg text-sm"
+              style={{ backgroundColor: colors.bg.subtle, border: `1px solid ${colors.border.default}`, color: colors.text.muted }}
+            >
+              {showDataTables ? 'Hide' : 'Show'} chart data tables
+            </button>
             {uploadError && <span id="miles-upload-error" role="alert" className="text-sm" style={{ color: colors.accent.negative }}>{uploadError}</span>}
           </div>
+
+          {uploadSummary && (
+            <div className="mt-3 p-3 rounded-lg" style={{ backgroundColor: colors.bg.subtle, border: `1px solid ${colors.border.default}` }}>
+              <div className="text-sm font-medium mb-2">Last upload summary</div>
+              <div className="flex flex-wrap gap-x-6 gap-y-1 text-sm" style={{ color: colors.text.secondary }}>
+                <span>Rows: {uploadSummary.rows}</span>
+                <span>Date range: {uploadSummary.dateStart} to {uploadSummary.dateEnd}</span>
+                <span>Columns detected: {uploadSummary.columns.length}</span>
+              </div>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {uploadSummary.columns.map((col) => (
+                  <span key={col} className="px-2 py-1 rounded text-xs" style={{ backgroundColor: colors.bg.card, color: colors.text.secondary }}>
+                    {col}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+          {excludeOutliers && removedOutlierCount > 0 && (
+            <div className="mt-2 text-sm" style={{ color: colors.accent.warning }}>
+              Excluded {removedOutlierCount} outlier rows and recalculated insights.
+            </div>
+          )}
         </div>
+
+        {monthlyBenchmarks && (
+          <div className="mb-6 rounded-xl p-4" style={{ backgroundColor: colors.bg.card, border: `1px solid ${colors.border.default}` }}>
+            <h3 className="text-base font-medium mb-3">Meaningful Baselines (True Cost per km)</h3>
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-3 text-sm">
+              <div className="p-3 rounded-lg" style={{ backgroundColor: colors.bg.subtle }}>
+                <div style={{ color: colors.text.muted }}>Current month</div>
+                <div className="text-lg font-semibold">€{monthlyBenchmarks.current.costPerKm.toFixed(2)}/km</div>
+                <div style={{ color: colors.text.subtle }}>{monthlyBenchmarks.current.month}</div>
+              </div>
+              <div className="p-3 rounded-lg" style={{ backgroundColor: colors.bg.subtle }}>
+                <div style={{ color: colors.text.muted }}>Last month</div>
+                <div className="text-lg font-semibold">
+                  {monthlyBenchmarks.previous ? `€${monthlyBenchmarks.previous.costPerKm.toFixed(2)}/km` : 'n/a'}
+                </div>
+                {monthlyBenchmarks.vsPrevious !== null && (
+                  <div style={{ color: monthlyBenchmarks.vsPrevious > 0 ? colors.accent.negative : colors.accent.success }}>
+                    {monthlyBenchmarks.vsPrevious > 0 ? '+' : ''}{monthlyBenchmarks.vsPrevious.toFixed(1)}%
+                  </div>
+                )}
+              </div>
+              <div className="p-3 rounded-lg" style={{ backgroundColor: colors.bg.subtle }}>
+                <div style={{ color: colors.text.muted }}>3-month average</div>
+                <div className="text-lg font-semibold">€{monthlyBenchmarks.rollingAvg.toFixed(2)}/km</div>
+                <div style={{ color: monthlyBenchmarks.vsRollingAvg > 0 ? colors.accent.negative : colors.accent.success }}>
+                  {monthlyBenchmarks.vsRollingAvg > 0 ? '+' : ''}{monthlyBenchmarks.vsRollingAvg.toFixed(1)}% vs avg
+                </div>
+              </div>
+              <div className="p-3 rounded-lg" style={{ backgroundColor: colors.bg.subtle }}>
+                <div style={{ color: colors.text.muted }}>Personal best</div>
+                <div className="text-lg font-semibold" style={{ color: colors.accent.success }}>€{monthlyBenchmarks.best.costPerKm.toFixed(2)}/km</div>
+                <div style={{ color: colors.text.subtle }}>
+                  {monthlyBenchmarks.best.month} ({monthlyBenchmarks.vsBest > 0 ? '+' : ''}{monthlyBenchmarks.vsBest.toFixed(1)}% now)
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* ═══════════════════════════════════════════════════════════════════════ */}
         {/* TAB NAVIGATION */}
@@ -1058,6 +1190,84 @@ export default function Dashboard() {
             </button>
           ))}
         </nav>
+
+        {showDataTables && (
+          <div className="mb-8 rounded-xl p-4 overflow-x-auto" style={{ backgroundColor: colors.bg.card, border: `1px solid ${colors.border.default}` }}>
+            <h3 className="text-base font-medium mb-4">Chart Data Tables</h3>
+
+            <div className="mb-4">
+              <h4 className="text-sm mb-2" style={{ color: colors.text.secondary }}>Monthly Trend</h4>
+              <table className="min-w-full text-sm">
+                <thead>
+                  <tr style={{ color: colors.text.muted }}>
+                    <th className="text-left pr-4">Month</th>
+                    <th className="text-left pr-4">Trips</th>
+                    <th className="text-left pr-4">Distance</th>
+                    <th className="text-left pr-4">True Cost (€)</th>
+                    <th className="text-left">Cost/km (€)</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {monthlyData.map((row) => (
+                    <tr key={row.month}>
+                      <td className="pr-4">{row.month}</td>
+                      <td className="pr-4">{row.trips}</td>
+                      <td className="pr-4">{(row.distance || 0).toFixed(1)}</td>
+                      <td className="pr-4">{(row.trueCost || 0).toFixed(2)}</td>
+                      <td>{((row.trueCost || 0) / Math.max(row.distance || 1, 1)).toFixed(2)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="mb-4">
+              <h4 className="text-sm mb-2" style={{ color: colors.text.secondary }}>Year-over-Year</h4>
+              <table className="min-w-full text-sm">
+                <thead>
+                  <tr style={{ color: colors.text.muted }}>
+                    <th className="text-left pr-4">Year</th>
+                    <th className="text-left pr-4">Trips</th>
+                    <th className="text-left pr-4">Distance</th>
+                    <th className="text-left pr-4">True Cost (€)</th>
+                    <th className="text-left">Cost/km (€)</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {yearlyData.map((row) => (
+                    <tr key={row.year}>
+                      <td className="pr-4">{row.year}</td>
+                      <td className="pr-4">{row.trips}</td>
+                      <td className="pr-4">{(row.distance || 0).toFixed(1)}</td>
+                      <td className="pr-4">{(row.trueCost || 0).toFixed(2)}</td>
+                      <td>{((row.trueCost || 0) / Math.max(row.distance || 1, 1)).toFixed(2)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div>
+              <h4 className="text-sm mb-2" style={{ color: colors.text.secondary }}>Cost Breakdown</h4>
+              <table className="min-w-full text-sm">
+                <thead>
+                  <tr style={{ color: colors.text.muted }}>
+                    <th className="text-left pr-4">Category</th>
+                    <th className="text-left">Value (€)</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {costBreakdown.map((row) => (
+                    <tr key={row.name}>
+                      <td className="pr-4">{row.name}</td>
+                      <td>{row.value.toFixed(2)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
 
         {/* ═══════════════════════════════════════════════════════════════════════ */}
         {/* OVERVIEW TAB */}
