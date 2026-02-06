@@ -991,6 +991,71 @@ export default function Dashboard() {
     };
   }, [monthlyData]);
 
+  const automatedInsights = useMemo(() => {
+    const insights = [];
+    const avgMonthlyDistance = monthlyData.length
+      ? monthlyData.reduce((sum, m) => sum + (m.distance || 0), 0) / monthlyData.length
+      : 0;
+    const avgMonthlyTrueCost = monthlyData.length
+      ? monthlyData.reduce((sum, m) => sum + (m.trueCost || 0), 0) / monthlyData.length
+      : 0;
+    const electricShare = summaryStats.totalTrips > 0
+      ? (summaryStats.electricTrips / summaryStats.totalTrips) * 100
+      : 0;
+    const freeTripShare = summaryStats.totalTrips > 0
+      ? (summaryStats.freeTrips / summaryStats.totalTrips) * 100
+      : 0;
+
+    insights.push(`Analyzed ${summaryStats.totalTrips} trips${uploadedFileName ? ` from ${uploadedFileName}` : ''}.`);
+    insights.push(`Average monthly distance is ${avgMonthlyDistance.toFixed(1)} km and average monthly true cost is €${avgMonthlyTrueCost.toFixed(2)}.`);
+    insights.push(`Electric trip share is ${electricShare.toFixed(1)}% (${summaryStats.electricTrips}/${summaryStats.totalTrips}).`);
+    insights.push(`Free-trip share is ${freeTripShare.toFixed(1)}% (${summaryStats.freeTrips}/${summaryStats.totalTrips}).`);
+
+    if (monthlyBenchmarks?.vsRollingAvg !== undefined) {
+      insights.push(
+        `Current month true cost/km is ${monthlyBenchmarks.vsRollingAvg > 0 ? '+' : ''}${monthlyBenchmarks.vsRollingAvg.toFixed(1)}% vs 3-month average.`
+      );
+    }
+
+    return insights.slice(0, 5);
+  }, [monthlyData, summaryStats, monthlyBenchmarks, uploadedFileName]);
+
+  const anomalyAlerts = useMemo(() => {
+    const alerts = [];
+
+    if (monthlyBenchmarks && Math.abs(monthlyBenchmarks.vsRollingAvg) >= 20) {
+      alerts.push({
+        title: 'Cost efficiency shift',
+        detail: `Current month true cost/km is ${monthlyBenchmarks.vsRollingAvg > 0 ? '+' : ''}${monthlyBenchmarks.vsRollingAvg.toFixed(1)}% vs 3-month average.`,
+        severity: monthlyBenchmarks.vsRollingAvg > 0 ? 'high' : 'medium'
+      });
+    }
+
+    const feeShare = summaryStats.totalTrueCost > 0
+      ? (summaryStats.totalFees / summaryStats.totalTrueCost) * 100
+      : 0;
+    if (feeShare >= 10) {
+      alerts.push({
+        title: 'Fee-heavy spending',
+        detail: `Fees account for ${feeShare.toFixed(1)}% of true cost.`,
+        severity: feeShare >= 15 ? 'high' : 'medium'
+      });
+    }
+
+    const lowFreeTripShare = summaryStats.totalTrips > 0
+      ? (summaryStats.freeTrips / summaryStats.totalTrips) * 100
+      : 0;
+    if (summaryStats.totalTrips >= 100 && lowFreeTripShare < 20) {
+      alerts.push({
+        title: 'Low free-trip ratio',
+        detail: `Only ${lowFreeTripShare.toFixed(1)}% of trips are free in the current dataset.`,
+        severity: 'low'
+      });
+    }
+
+    return alerts;
+  }, [summaryStats, monthlyBenchmarks]);
+
   const filteredModels = useMemo(() => {
     if (selectedBrands.length === 0) return modelData;
     return modelData.filter(m => selectedBrands.includes(m.brand));
@@ -1166,6 +1231,46 @@ export default function Dashboard() {
             </div>
           </div>
         )}
+
+        <div className="mb-6 grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div className="rounded-xl p-4" style={{ backgroundColor: colors.bg.card, border: `1px solid ${colors.border.default}` }}>
+            <h3 className="text-base font-medium mb-3">Automated Insight Summary</h3>
+            <ul className="space-y-2 text-sm" style={{ color: colors.text.secondary }}>
+              {automatedInsights.map((insight) => (
+                <li key={insight}>• {insight}</li>
+              ))}
+            </ul>
+          </div>
+
+          <div className="rounded-xl p-4" style={{ backgroundColor: colors.bg.card, border: `1px solid ${colors.border.default}` }}>
+            <h3 className="text-base font-medium mb-3">Anomaly Alerts</h3>
+            {anomalyAlerts.length > 0 ? (
+              <div className="space-y-2">
+                {anomalyAlerts.map((alert) => (
+                  <div
+                    key={alert.title}
+                    className="p-3 rounded-lg"
+                    style={{
+                      backgroundColor: alert.severity === 'high'
+                        ? 'rgba(239,68,68,0.12)'
+                        : alert.severity === 'medium'
+                          ? 'rgba(245,158,11,0.12)'
+                          : 'rgba(34,197,94,0.12)',
+                      border: `1px solid ${alert.severity === 'high' ? colors.accent.negative : alert.severity === 'medium' ? colors.accent.warning : colors.accent.success}`
+                    }}
+                  >
+                    <div className="text-sm font-semibold">{alert.title}</div>
+                    <div className="text-sm" style={{ color: colors.text.secondary }}>{alert.detail}</div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-sm" style={{ color: colors.text.secondary }}>
+                No strong anomalies detected. Your recent mobility pattern looks stable.
+              </p>
+            )}
+          </div>
+        </div>
 
         {/* ═══════════════════════════════════════════════════════════════════════ */}
         {/* TAB NAVIGATION */}

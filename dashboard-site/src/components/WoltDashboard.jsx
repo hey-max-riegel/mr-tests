@@ -541,6 +541,79 @@ export default function WoltDashboard() {
     };
   }, [monthlyData]);
 
+  const automatedInsights = useMemo(() => {
+    const insights = [];
+    const avgMonthlySpend = monthlyData.length
+      ? monthlyData.reduce((sum, m) => sum + m.amount, 0) / monthlyData.length
+      : 0;
+    const topCuisine = cuisineData[0];
+    const topRestaurantName = stats.topRestaurant?.[0] || 'n/a';
+    const topRestaurantOrders = stats.topRestaurant?.[1] || 0;
+
+    insights.push(`Analyzed ${filteredData.length} orders${uploadedFileName ? ` from ${uploadedFileName}` : ''}.`);
+    insights.push(`Average spend per order is €${stats.avgOrder.toFixed(2)} and average monthly spend is €${avgMonthlySpend.toFixed(2)}.`);
+
+    if (topCuisine) {
+      const share = stats.totalOrders > 0 ? (topCuisine.orders / stats.totalOrders) * 100 : 0;
+      insights.push(`Top cuisine is ${topCuisine.name} with ${topCuisine.orders} orders (${share.toFixed(1)}% of orders).`);
+    }
+
+    if (topRestaurantName !== 'n/a') {
+      insights.push(`Most used restaurant is ${topRestaurantName} with ${topRestaurantOrders} orders.`);
+    }
+
+    if (monthlyBenchmarks?.vsRollingAvg !== undefined) {
+      insights.push(
+        `Current month is ${monthlyBenchmarks.vsRollingAvg > 0 ? '+' : ''}${monthlyBenchmarks.vsRollingAvg.toFixed(1)}% vs your 3-month average.`
+      );
+    }
+
+    if (currentMonthBudget.projectedSpend > 0) {
+      const delta = currentMonthBudget.projectedSpend - monthlyBudget;
+      insights.push(
+        delta > 0
+          ? `Projected month-end is €${currentMonthBudget.projectedSpend.toFixed(2)}, about €${delta.toFixed(2)} above budget.`
+          : `Projected month-end is €${currentMonthBudget.projectedSpend.toFixed(2)}, about €${Math.abs(delta).toFixed(2)} below budget.`
+      );
+    }
+
+    return insights.slice(0, 5);
+  }, [monthlyData, cuisineData, stats, filteredData.length, uploadedFileName, monthlyBenchmarks, currentMonthBudget, monthlyBudget]);
+
+  const anomalyAlerts = useMemo(() => {
+    const alerts = [];
+
+    if (monthlyBenchmarks && Math.abs(monthlyBenchmarks.vsRollingAvg) >= 20) {
+      alerts.push({
+        title: 'Monthly spend shift',
+        detail: `Current month is ${monthlyBenchmarks.vsRollingAvg > 0 ? '+' : ''}${monthlyBenchmarks.vsRollingAvg.toFixed(1)}% vs 3-month average.`,
+        severity: monthlyBenchmarks.vsRollingAvg > 0 ? 'high' : 'medium'
+      });
+    }
+
+    if (stats.avgOrder > 0 && stats.maxOrder >= stats.avgOrder * 2.5) {
+      alerts.push({
+        title: 'High single-order spike',
+        detail: `Largest order (€${stats.maxOrder.toFixed(2)}) is ${(stats.maxOrder / stats.avgOrder).toFixed(1)}x your average order.`,
+        severity: 'medium'
+      });
+    }
+
+    const lateNightOrders = hourData
+      .filter((h) => h.hour >= 22 || h.hour <= 5)
+      .reduce((sum, h) => sum + h.orders, 0);
+    const lateNightPct = stats.totalOrders > 0 ? (lateNightOrders / stats.totalOrders) * 100 : 0;
+    if (stats.totalOrders >= 20 && lateNightPct >= 30) {
+      alerts.push({
+        title: 'Late-night concentration',
+        detail: `${lateNightPct.toFixed(1)}% of orders happen between 22:00 and 05:59.`,
+        severity: 'low'
+      });
+    }
+
+    return alerts;
+  }, [monthlyBenchmarks, stats, hourData]);
+
   // Current month budget tracking
   const currentMonthBudget = useMemo(() => {
     const now = new Date();
@@ -1017,6 +1090,46 @@ export default function WoltDashboard() {
             </div>
           </div>
         )}
+
+        <div className="mb-6 grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div className="p-5 rounded-2xl" style={{ backgroundColor: WOLT_BG, border: `1px solid ${WOLT_BORDER}` }}>
+            <h3 className="text-lg font-bold mb-3" style={{ color: WOLT_TEXT }}>Automated Insight Summary</h3>
+            <ul className="space-y-2 text-sm" style={{ color: WOLT_TEXT_SECONDARY }}>
+              {automatedInsights.map((insight) => (
+                <li key={insight}>• {insight}</li>
+              ))}
+            </ul>
+          </div>
+
+          <div className="p-5 rounded-2xl" style={{ backgroundColor: WOLT_BG, border: `1px solid ${WOLT_BORDER}` }}>
+            <h3 className="text-lg font-bold mb-3" style={{ color: WOLT_TEXT }}>Anomaly Alerts</h3>
+            {anomalyAlerts.length > 0 ? (
+              <div className="space-y-2">
+                {anomalyAlerts.map((alert) => (
+                  <div
+                    key={alert.title}
+                    className="p-3 rounded-xl"
+                    style={{
+                      backgroundColor: alert.severity === 'high'
+                        ? 'rgba(239,68,68,0.08)'
+                        : alert.severity === 'medium'
+                          ? 'rgba(245,158,11,0.10)'
+                          : 'rgba(34,197,94,0.10)',
+                      border: `1px solid ${alert.severity === 'high' ? WOLT_DANGER : alert.severity === 'medium' ? WOLT_WARNING : WOLT_SUCCESS}`
+                    }}
+                  >
+                    <div className="text-sm font-semibold" style={{ color: WOLT_TEXT }}>{alert.title}</div>
+                    <div className="text-sm" style={{ color: WOLT_TEXT_SECONDARY }}>{alert.detail}</div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-sm" style={{ color: WOLT_TEXT_SECONDARY }}>
+                No strong anomalies detected. Your recent behavior is within normal range.
+              </p>
+            )}
+          </div>
+        </div>
 
         {showDataTables && (
           <div className="mb-6 p-5 rounded-2xl overflow-x-auto" style={{ backgroundColor: WOLT_BG, border: `1px solid ${WOLT_BORDER}` }}>
