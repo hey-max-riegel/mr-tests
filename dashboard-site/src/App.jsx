@@ -21,9 +21,26 @@ function Home() {
         <h2 className="text-lg font-semibold text-blue-900">Start Here (2 Minutes)</h2>
         <ol className="mt-3 list-decimal pl-5 space-y-2 text-sm text-blue-900">
           <li>Open either Wolt or Miles dashboard below.</li>
+          <li>Download a template below if you are unsure about format.</li>
           <li>Click the upload button and select your CSV file.</li>
           <li>If upload fails, match your columns to the exact headers shown below.</li>
         </ol>
+        <div className="mt-4 flex flex-wrap gap-2">
+          <a
+            href="/wolt_template.csv"
+            download
+            className="rounded-lg border border-blue-300 bg-white px-3 py-2 text-sm font-medium text-blue-900 hover:bg-blue-100 transition"
+          >
+            Download Wolt Template
+          </a>
+          <a
+            href="/miles_template.csv"
+            download
+            className="rounded-lg border border-blue-300 bg-white px-3 py-2 text-sm font-medium text-blue-900 hover:bg-blue-100 transition"
+          >
+            Download Miles Template
+          </a>
+        </div>
         <p className="mt-3 text-sm text-blue-900">
           Format tips: comma-separated CSV, first row must be headers, dates should be <code>YYYY-MM-DD</code>, decimals should use a dot (<code>12.50</code>).
         </p>
@@ -47,6 +64,13 @@ function Home() {
         <section className="rounded-2xl border border-gray-200 p-6 bg-white">
           <h3 className="text-lg font-semibold text-gray-900">Wolt CSV: Required Columns</h3>
           <p className="mt-2 text-sm text-gray-600">Use these exact header names:</p>
+          <a
+            href="/wolt_template.csv"
+            download
+            className="mt-3 inline-block rounded-lg border border-gray-300 bg-gray-50 px-3 py-2 text-sm font-medium text-gray-800 hover:bg-gray-100 transition"
+          >
+            Download Wolt CSV Template
+          </a>
           <div className="mt-3 flex flex-wrap gap-2">
             {woltHeaders.map((header) => (
               <span key={header} className="rounded-md bg-gray-100 px-2 py-1 text-xs font-medium text-gray-800">
@@ -64,6 +88,13 @@ Marmarita,2025-11-14,18:28,25.07,2025,11,14,Friday,18,Middle Eastern
         <section className="rounded-2xl border border-gray-200 p-6 bg-white">
           <h3 className="text-lg font-semibold text-gray-900">Miles CSV: Columns</h3>
           <p className="mt-2 text-sm text-gray-600">Recommended columns (for full analytics):</p>
+          <a
+            href="/miles_template.csv"
+            download
+            className="mt-3 inline-block rounded-lg border border-gray-300 bg-gray-50 px-3 py-2 text-sm font-medium text-gray-800 hover:bg-gray-100 transition"
+          >
+            Download Miles CSV Template
+          </a>
           <div className="mt-3 flex flex-wrap gap-2">
             {milesRecommendedHeaders.map((header) => (
               <span key={header} className="rounded-md bg-gray-100 px-2 py-1 text-xs font-medium text-gray-800">

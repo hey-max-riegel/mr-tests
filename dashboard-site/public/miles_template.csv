@@ -1,0 +1,4 @@
+Date,Vehicle,License Plate,Trip Type,Price (EUR),Distance (km),Pass_Monthly_Cost,TopUp_Per_Trip,Reservation_Fee,Penalty_Fee,Total_Cost
+2025-11-14,VW Taigo,B-MI1234,Private,12.50,8.2,33.33,0.00,0.00,0.00,45.83
+2025-11-15,Audi A4 Avant,B-MI8888,Business,18.90,12.4,33.33,0.00,0.00,0.00,52.23
+2025-11-16,Tesla Model 3,B-EV4321,Private,0.00,5.8,33.33,0.00,0.00,0.00,33.33
