@@ -1,0 +1,10 @@
+{
+  "name": "mr-tests",
+  "private": true,
+  "version": "1.0.0",
+  "scripts": {
+    "build": "npm --prefix dashboard-site install && npm --prefix dashboard-site run build",
+    "dev": "npm --prefix dashboard-site run dev",
+    "preview": "npm --prefix dashboard-site run preview"
+  }
+}
