@@ -1,7 +1,8 @@
-import React from 'react';
+import React, { Suspense, lazy } from 'react';
 import { Link, NavLink, Route, Routes } from 'react-router-dom';
-import WoltDashboard from './components/WoltDashboard.jsx';
-import MilesDashboard from './components/MilesDashboard.jsx';
+
+const WoltDashboard = lazy(() => import('./components/WoltDashboard.jsx'));
+const MilesDashboard = lazy(() => import('./components/MilesDashboard.jsx'));
 
 const navLinkClass = ({ isActive }) =>
   `px-3 py-2 rounded-lg text-sm font-medium transition ${isActive ? 'bg-black text-white' : 'bg-white text-gray-700 hover:bg-gray-100'}`;
@@ -25,6 +26,9 @@ function Home() {
         </ol>
         <p className="mt-3 text-sm text-blue-900">
           Format tips: comma-separated CSV, first row must be headers, dates should be <code>YYYY-MM-DD</code>, decimals should use a dot (<code>12.50</code>).
+        </p>
+        <p className="mt-2 text-sm text-blue-900">
+          Privacy: your CSV data is processed locally in your browser and is not uploaded to our server.
         </p>
       </div>
 
@@ -89,6 +93,9 @@ Date,Vehicle,License Plate,Trip Type,Price (EUR),Distance (km),Pass_Monthly_Cost
 export default function App() {
   return (
     <div className="min-h-screen bg-gray-50">
+      <a href="#main-content" className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-50 focus:rounded-md focus:bg-white focus:px-3 focus:py-2 focus:text-sm focus:text-gray-900">
+        Skip to main content
+      </a>
       <header className="sticky top-0 z-20 border-b border-gray-200 bg-gray-50/95 backdrop-blur">
         <div className="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between">
           <Link to="/" className="text-sm md:text-base font-semibold text-gray-900">Dashboard Hub</Link>
@@ -99,11 +106,21 @@ export default function App() {
         </div>
       </header>
 
-      <Routes>
-        <Route path="/" element={<Home />} />
-        <Route path="/wolt" element={<WoltDashboard />} />
-        <Route path="/miles" element={<MilesDashboard />} />
-      </Routes>
+      <div id="main-content">
+        <Suspense
+          fallback={(
+            <div className="max-w-4xl mx-auto p-6 text-gray-700" role="status" aria-live="polite">
+              Loading dashboard...
+            </div>
+          )}
+        >
+          <Routes>
+            <Route path="/" element={<Home />} />
+            <Route path="/wolt" element={<WoltDashboard />} />
+            <Route path="/miles" element={<MilesDashboard />} />
+          </Routes>
+        </Suspense>
+      </div>
     </div>
   );
 }

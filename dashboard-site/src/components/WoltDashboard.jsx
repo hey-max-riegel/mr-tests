@@ -256,6 +256,55 @@ const parseCSVLine = (line) => {
   return values;
 };
 
+const WOLT_REQUIRED_HEADERS = ['Restaurant', 'Date', 'Time', 'Amount', 'Year', 'Month', 'Day', 'DayOfWeek', 'Hour', 'Cuisine'];
+const WOLT_MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024;
+const WOLT_MAX_ROWS = 20000;
+
+const isValidDate = (value) => /^\d{4}-\d{2}-\d{2}$/.test(String(value || '').trim());
+const isValidTime = (value) => /^([01]\d|2[0-3]):[0-5]\d$/.test(String(value || '').trim());
+
+const validateWoltCSV = (csv) => {
+  const lines = String(csv || '').trim().split(/\r?\n/).filter(Boolean);
+  if (lines.length < 2) {
+    return { ok: false, error: 'CSV is empty or missing data rows.' };
+  }
+
+  const headers = parseCSVLine(lines[0]).map((h) => String(h || '').trim());
+  const missing = WOLT_REQUIRED_HEADERS.filter((h) => !headers.includes(h));
+  if (missing.length) {
+    return { ok: false, error: `Missing required columns: ${missing.join(', ')}` };
+  }
+
+  const rowCount = lines.length - 1;
+  if (rowCount > WOLT_MAX_ROWS) {
+    return { ok: false, error: `File has ${rowCount} rows. Maximum supported is ${WOLT_MAX_ROWS}.` };
+  }
+
+  for (let rowIndex = 1; rowIndex < lines.length; rowIndex += 1) {
+    const values = parseCSVLine(lines[rowIndex]);
+    const row = {};
+    headers.forEach((h, i) => { row[h] = String(values[i] ?? '').trim(); });
+
+    const amount = parseFloat(row.Amount);
+    const year = parseInt(row.Year, 10);
+    const month = parseInt(row.Month, 10);
+    const day = parseInt(row.Day, 10);
+    const hour = parseInt(row.Hour, 10);
+
+    if (!row.Restaurant) return { ok: false, error: `Row ${rowIndex + 1}: Restaurant is empty.` };
+    if (!isValidDate(row.Date)) return { ok: false, error: `Row ${rowIndex + 1}: Date must be YYYY-MM-DD.` };
+    if (!isValidTime(row.Time)) return { ok: false, error: `Row ${rowIndex + 1}: Time must be HH:MM (24h).` };
+    if (Number.isNaN(amount)) return { ok: false, error: `Row ${rowIndex + 1}: Amount must be a number.` };
+    if (Number.isNaN(year)) return { ok: false, error: `Row ${rowIndex + 1}: Year must be numeric.` };
+    if (Number.isNaN(month) || month < 1 || month > 12) return { ok: false, error: `Row ${rowIndex + 1}: Month must be 1-12.` };
+    if (Number.isNaN(day) || day < 1 || day > 31) return { ok: false, error: `Row ${rowIndex + 1}: Day must be 1-31.` };
+    if (Number.isNaN(hour) || hour < 0 || hour > 23) return { ok: false, error: `Row ${rowIndex + 1}: Hour must be 0-23.` };
+    if (!row.Cuisine) return { ok: false, error: `Row ${rowIndex + 1}: Cuisine is empty.` };
+  }
+
+  return { ok: true };
+};
+
 const toDateTime = (row) => {
   if (!row?.Date) return Number.NaN;
   const iso = `${row.Date}T${row.Time || '00:00'}:00`;
@@ -265,11 +314,11 @@ const toDateTime = (row) => {
 const parseCSV = (csv) => {
   const lines = csv.trim().split(/\r?\n/).filter(Boolean);
   if (lines.length < 2) return [];
-  const headers = parseCSVLine(lines[0]);
+  const headers = parseCSVLine(lines[0]).map((h) => String(h || '').trim());
   const parsed = lines.slice(1).map(line => {
     const values = parseCSVLine(line);
     const obj = {};
-    headers.forEach((h, i) => { obj[h] = values[i]; });
+    headers.forEach((h, i) => { obj[h] = String(values[i] ?? '').trim(); });
     obj.Amount = parseFloat(obj.Amount) || 0;
     obj.Year = parseInt(obj.Year, 10) || 0;
     obj.Month = parseInt(obj.Month, 10) || 0;
@@ -350,9 +399,18 @@ export default function WoltDashboard() {
   const handleCSVUpload = (event) => {
     const file = event.target.files?.[0];
     if (!file) return;
+    if (file.size > WOLT_MAX_FILE_SIZE_BYTES) {
+      setUploadError(`File is too large. Maximum size is ${Math.round(WOLT_MAX_FILE_SIZE_BYTES / (1024 * 1024))} MB.`);
+      return;
+    }
     const reader = new FileReader();
     reader.onload = (e) => {
       const content = String(e.target?.result || '');
+      const validation = validateWoltCSV(content);
+      if (!validation.ok) {
+        setUploadError(validation.error);
+        return;
+      }
       const parsed = parseCSV(content);
       if (parsed.length === 0) {
         setUploadError('Could not parse any rows. Please upload a valid Wolt CSV export.');
@@ -624,8 +682,9 @@ export default function WoltDashboard() {
               <h3 className="text-lg font-bold" style={{color: WOLT_BLUE}}>Monthly Budget Tracker</h3>
             </div>
             <div className="flex items-center gap-2">
-              <label className="text-sm font-medium" style={{color: WOLT_TEXT_SECONDARY}}>Budget:</label>
+              <label htmlFor="wolt-monthly-budget" className="text-sm font-medium" style={{color: WOLT_TEXT_SECONDARY}}>Budget:</label>
               <input
+                id="wolt-monthly-budget"
                 type="number"
                 value={monthlyBudget}
                 onChange={(e) => setMonthlyBudget(Math.max(1, parseInt(e.target.value) || 0))}
@@ -661,10 +720,20 @@ export default function WoltDashboard() {
         {/* NEW: Advanced Filters */}
         <div className="mb-6 p-4 rounded-2xl" style={{ backgroundColor: WOLT_BG_SUBTLE, border: `1px solid ${WOLT_BORDER}` }}>
           <div className="flex flex-wrap items-center gap-3 mb-4">
-            <label className="px-3 py-2 rounded-lg border text-sm font-medium cursor-pointer" style={{ borderColor: WOLT_BORDER, backgroundColor: WOLT_BG }}>
+            <label htmlFor="wolt-csv-upload" className="px-3 py-2 rounded-lg border text-sm font-medium cursor-pointer" style={{ borderColor: WOLT_BORDER, backgroundColor: WOLT_BG }}>
               Upload Wolt CSV
-              <input type="file" accept=".csv,text/csv" className="hidden" onChange={handleCSVUpload} />
             </label>
+            <input
+              id="wolt-csv-upload"
+              type="file"
+              accept=".csv,text/csv"
+              className="sr-only"
+              onChange={handleCSVUpload}
+              aria-describedby="wolt-upload-help wolt-upload-error"
+            />
+            <span id="wolt-upload-help" className="text-sm" style={{color: WOLT_TEXT_SECONDARY}}>
+              Data stays in your browser. Max 5MB, max 20,000 rows.
+            </span>
             {uploadedFileName && <span className="text-sm" style={{color: WOLT_TEXT_SECONDARY}}>Using: {uploadedFileName}</span>}
             {uploadedCSV && (
               <button
@@ -675,13 +744,14 @@ export default function WoltDashboard() {
                 Use Built-in Sample
               </button>
             )}
-            {uploadError && <span className="text-sm" style={{color: WOLT_DANGER}}>{uploadError}</span>}
+            {uploadError && <span id="wolt-upload-error" role="alert" className="text-sm" style={{color: WOLT_DANGER}}>{uploadError}</span>}
           </div>
 
-          <div className="flex flex-wrap items-center gap-4">
+          <div className="flex flex-wrap items-center gap-4" aria-label="Wolt filters">
             <div className="flex items-center gap-2">
-              <span className="text-sm font-medium" style={{color: WOLT_TEXT_SECONDARY}}>🗓️ Year:</span>
+              <label htmlFor="wolt-filter-year" className="text-sm font-medium" style={{color: WOLT_TEXT_SECONDARY}}>🗓️ Year:</label>
               <select
+                id="wolt-filter-year"
                 value={selectedYear}
                 onChange={(e) => setSelectedYear(e.target.value)}
                 className="px-3 py-2 rounded-lg border font-medium"
@@ -693,8 +763,9 @@ export default function WoltDashboard() {
             </div>
 
             <div className="flex items-center gap-2">
-              <span className="text-sm font-medium" style={{color: WOLT_TEXT_SECONDARY}}>🍜 Cuisine:</span>
+              <label htmlFor="wolt-filter-cuisine" className="text-sm font-medium" style={{color: WOLT_TEXT_SECONDARY}}>🍜 Cuisine:</label>
               <select
+                id="wolt-filter-cuisine"
                 value={selectedCuisine}
                 onChange={(e) => setSelectedCuisine(e.target.value)}
                 className="px-3 py-2 rounded-lg border font-medium"
@@ -706,8 +777,9 @@ export default function WoltDashboard() {
             </div>
 
             <div className="flex items-center gap-2">
-              <span className="text-sm font-medium" style={{color: WOLT_TEXT_SECONDARY}}>🏪 Restaurant:</span>
+              <label htmlFor="wolt-filter-restaurant" className="text-sm font-medium" style={{color: WOLT_TEXT_SECONDARY}}>🏪 Restaurant:</label>
               <select
+                id="wolt-filter-restaurant"
                 value={selectedRestaurant}
                 onChange={(e) => setSelectedRestaurant(e.target.value)}
                 className="px-3 py-2 rounded-lg border font-medium max-w-48"

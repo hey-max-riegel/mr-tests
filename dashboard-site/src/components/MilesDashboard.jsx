@@ -388,6 +388,48 @@ const parseCSVLine = (line) => {
   return values;
 };
 
+const MILES_REQUIRED_HEADERS = ['Date', 'Vehicle', 'License Plate', 'Trip Type', 'Price (EUR)', 'Distance (km)'];
+const MILES_MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024;
+const MILES_MAX_ROWS = 20000;
+
+const isMilesDate = (value) => /^\d{4}-\d{2}-\d{2}$/.test(String(value || '').trim());
+
+const validateMilesCSV = (csv) => {
+  const lines = String(csv || '').trim().split(/\r?\n/).filter(Boolean);
+  if (lines.length < 2) {
+    return { ok: false, error: 'CSV is empty or missing data rows.' };
+  }
+
+  const headers = parseCSVLine(lines[0]).map((h) => String(h || '').trim());
+  const missing = MILES_REQUIRED_HEADERS.filter((h) => !headers.includes(h));
+  if (missing.length) {
+    return { ok: false, error: `Missing required columns: ${missing.join(', ')}` };
+  }
+
+  const rowCount = lines.length - 1;
+  if (rowCount > MILES_MAX_ROWS) {
+    return { ok: false, error: `File has ${rowCount} rows. Maximum supported is ${MILES_MAX_ROWS}.` };
+  }
+
+  for (let rowIndex = 1; rowIndex < lines.length; rowIndex += 1) {
+    const values = parseCSVLine(lines[rowIndex]);
+    const row = {};
+    headers.forEach((h, i) => { row[h] = String(values[i] ?? '').trim(); });
+
+    const price = parseFloat(row['Price (EUR)']);
+    const distance = parseFloat(row['Distance (km)']);
+
+    if (!isMilesDate(row.Date)) return { ok: false, error: `Row ${rowIndex + 1}: Date must be YYYY-MM-DD.` };
+    if (!row.Vehicle) return { ok: false, error: `Row ${rowIndex + 1}: Vehicle is empty.` };
+    if (!row['License Plate']) return { ok: false, error: `Row ${rowIndex + 1}: License Plate is empty.` };
+    if (!row['Trip Type']) return { ok: false, error: `Row ${rowIndex + 1}: Trip Type is empty.` };
+    if (Number.isNaN(price)) return { ok: false, error: `Row ${rowIndex + 1}: Price (EUR) must be a number.` };
+    if (Number.isNaN(distance)) return { ok: false, error: `Row ${rowIndex + 1}: Distance (km) must be a number.` };
+  }
+
+  return { ok: true };
+};
+
 const parseMilesCSV = (csv) => {
   const lines = csv.trim().split(/\r?\n/).filter(Boolean);
   if (lines.length < 2) return [];
@@ -869,9 +911,18 @@ export default function Dashboard() {
   const handleCSVUpload = (event) => {
     const file = event.target.files?.[0];
     if (!file) return;
+    if (file.size > MILES_MAX_FILE_SIZE_BYTES) {
+      setUploadError(`File is too large. Maximum size is ${Math.round(MILES_MAX_FILE_SIZE_BYTES / (1024 * 1024))} MB.`);
+      return;
+    }
     const reader = new FileReader();
     reader.onload = (e) => {
       const content = String(e.target?.result || '');
+      const validation = validateMilesCSV(content);
+      if (!validation.ok) {
+        setUploadError(validation.error);
+        return;
+      }
       const parsed = parseMilesCSV(content);
       if (!parsed.length) {
         setUploadError('Could not parse rows from CSV.');
@@ -954,10 +1005,20 @@ export default function Dashboard() {
 
         <div className="mb-6 rounded-xl p-4" style={{ backgroundColor: colors.bg.card, border: `1px solid ${colors.border.subtle}` }}>
           <div className="flex flex-wrap items-center gap-3">
-            <label className="px-3 py-2 rounded-lg text-sm cursor-pointer" style={{ backgroundColor: colors.bg.subtle, border: `1px solid ${colors.border.default}` }}>
+            <label htmlFor="miles-csv-upload" className="px-3 py-2 rounded-lg text-sm cursor-pointer" style={{ backgroundColor: colors.bg.subtle, border: `1px solid ${colors.border.default}` }}>
               Upload Miles CSV
-              <input type="file" accept=".csv,text/csv" className="hidden" onChange={handleCSVUpload} />
             </label>
+            <input
+              id="miles-csv-upload"
+              type="file"
+              accept=".csv,text/csv"
+              className="sr-only"
+              onChange={handleCSVUpload}
+              aria-describedby="miles-upload-help miles-upload-error"
+            />
+            <span id="miles-upload-help" className="text-sm" style={{ color: colors.text.muted }}>
+              Data stays in your browser. Max 5MB, max 20,000 rows.
+            </span>
             <span className="text-sm" style={{ color: colors.text.muted }}>
               {uploadedFileName ? `Using ${uploadedFileName}` : 'Using built-in snapshot data'}
             </span>
@@ -970,18 +1031,22 @@ export default function Dashboard() {
                 Reset Data
               </button>
             )}
-            {uploadError && <span className="text-sm" style={{ color: colors.accent.negative }}>{uploadError}</span>}
+            {uploadError && <span id="miles-upload-error" role="alert" className="text-sm" style={{ color: colors.accent.negative }}>{uploadError}</span>}
           </div>
         </div>
 
         {/* ═══════════════════════════════════════════════════════════════════════ */}
         {/* TAB NAVIGATION */}
         {/* ═══════════════════════════════════════════════════════════════════════ */}
-        <nav className="flex gap-1 mb-10 p-1 rounded-lg overflow-x-auto" style={{ backgroundColor: colors.bg.elevated }}>
+        <nav className="flex gap-1 mb-10 p-1 rounded-lg overflow-x-auto" style={{ backgroundColor: colors.bg.elevated }} role="tablist" aria-label="Miles dashboard sections">
           {tabs.map(tab => (
             <button
               key={tab.id}
               onClick={() => setActiveTab(tab.id)}
+              role="tab"
+              aria-selected={activeTab === tab.id}
+              aria-controls={`miles-panel-${tab.id}`}
+              id={`miles-tab-${tab.id}`}
               className="px-5 py-2.5 rounded-md text-sm font-medium transition-all duration-200 whitespace-nowrap"
               style={{
                 backgroundColor: activeTab === tab.id ? colors.bg.card : 'transparent',
@@ -998,7 +1063,7 @@ export default function Dashboard() {
         {/* OVERVIEW TAB */}
         {/* ═══════════════════════════════════════════════════════════════════════ */}
         {activeTab === 'overview' && (
-          <div className="space-y-6">
+          <div className="space-y-6" role="tabpanel" id="miles-panel-overview" aria-labelledby="miles-tab-overview">
             {/* Hero Stats */}
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
               <StatCard label="Total Trips" value={summaryStats.totalTrips} icon="🚗" color={colors.grey[400]} sparkData={monthlyData} sparkKey="trips" />
@@ -1090,7 +1155,7 @@ export default function Dashboard() {
         {/* TRUE COST TAB */}
         {/* ═══════════════════════════════════════════════════════════════════════ */}
         {activeTab === 'costs' && (
-          <div className="space-y-6">
+          <div className="space-y-6" role="tabpanel" id="miles-panel-costs" aria-labelledby="miles-tab-costs">
             {/* Hero */}
             <div className="rounded-2xl p-8" style={{ backgroundColor: colors.bg.card, border: `1px solid ${colors.border.hover}` }}>
               <div className="grid grid-cols-2 lg:grid-cols-4 gap-8">
@@ -1190,7 +1255,7 @@ export default function Dashboard() {
         {/* SAVINGS TAB */}
         {/* ═══════════════════════════════════════════════════════════════════════ */}
         {activeTab === 'savings' && (
-          <div className="space-y-6">
+          <div className="space-y-6" role="tabpanel" id="miles-panel-savings" aria-labelledby="miles-tab-savings">
             <SavingsSection summaryStats={summaryStats} costBreakdown={costBreakdown} />
             <CumulativeChart monthlyData={monthlyData} />
           </div>
@@ -1200,7 +1265,7 @@ export default function Dashboard() {
         {/* PATTERNS TAB */}
         {/* ═══════════════════════════════════════════════════════════════════════ */}
         {activeTab === 'patterns' && (
-          <div className="space-y-6">
+          <div className="space-y-6" role="tabpanel" id="miles-panel-patterns" aria-labelledby="miles-tab-patterns">
             {/* Time of Day Patterns */}
             <div className="rounded-xl p-6" style={{ backgroundColor: colors.bg.card, border: `1px solid ${colors.border.subtle}` }}>
               <h3 className="text-base font-medium mb-6">Booking Time Patterns</h3>
@@ -1397,7 +1462,7 @@ export default function Dashboard() {
         {/* TRENDS TAB */}
         {/* ═══════════════════════════════════════════════════════════════════════ */}
         {activeTab === 'trends' && (
-          <div className="space-y-6">
+          <div className="space-y-6" role="tabpanel" id="miles-panel-trends" aria-labelledby="miles-tab-trends">
             {/* Monthly Activity */}
             <div className="rounded-xl p-6" style={{ backgroundColor: colors.bg.card, border: `1px solid ${colors.border.subtle}` }}>
               <h3 className="text-base font-medium mb-6">Monthly Activity</h3>
@@ -1458,7 +1523,7 @@ export default function Dashboard() {
         {/* VEHICLES TAB */}
         {/* ═══════════════════════════════════════════════════════════════════════ */}
         {activeTab === 'vehicles' && (
-          <div className="space-y-6">
+          <div className="space-y-6" role="tabpanel" id="miles-panel-vehicles" aria-labelledby="miles-tab-vehicles">
             {/* Brand Filters */}
             <div className="flex flex-wrap gap-2">
               {vehicleBrandData.map(brand => (
@@ -1538,7 +1603,7 @@ export default function Dashboard() {
         {/* PLATES TAB */}
         {/* ═══════════════════════════════════════════════════════════════════════ */}
         {activeTab === 'plates' && (
-          <div className="space-y-6">
+          <div className="space-y-6" role="tabpanel" id="miles-panel-plates" aria-labelledby="miles-tab-plates">
             {/* Stats Overview */}
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
               <StatCard label="Unique Plates" value={plateStats.uniquePlates} icon="🔢" color={colors.grey[400]} />
@@ -1552,7 +1617,9 @@ export default function Dashboard() {
               <div className="flex items-center gap-4 mb-6">
                 <h3 className="text-base font-medium">License Plate Search</h3>
                 <div className="flex-1 max-w-md">
+                  <label htmlFor="miles-plate-search" className="sr-only">Search plates or vehicles</label>
                   <input
+                    id="miles-plate-search"
                     type="text"
                     placeholder="Search plates or vehicles..."
                     value={searchQuery}
@@ -1645,7 +1712,7 @@ export default function Dashboard() {
         {/* INSIGHTS TAB */}
         {/* ═══════════════════════════════════════════════════════════════════════ */}
         {activeTab === 'insights' && (
-          <div className="space-y-6">
+          <div className="space-y-6" role="tabpanel" id="miles-panel-insights" aria-labelledby="miles-tab-insights">
             {/* Summary */}
             <div className="rounded-2xl p-8" style={{ backgroundColor: colors.bg.card, border: `1px solid ${colors.border.hover}` }}>
               <div className="flex items-start gap-6">
